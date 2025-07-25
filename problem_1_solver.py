@@ -1,7 +1,7 @@
 from ortools.sat.python import cp_model
 from problem_1 import Problem_1
 import numpy as np
-import time
+import os
 
 # Mapping for sized [(2,2),(3,3),(3,9),(4,7)]
 # w - washers
@@ -16,6 +16,7 @@ def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots
     if return_spots:
         raise NotImplementedError("Returning the spots not implemented")
 
+    min_num_of_trucks = int(np.dot(np.array([4, 9, 27, 28]), data) / 208) # total area divided by truck area 8 * 26
     max_num_of_trucks = int(np.dot(np.array([4, 9, 27, 28]), data) * 1.5 / 208 + 1) # total area * 1.5 divided by truck area 8 * 26 + 1
     
     items = [f"w_{i}" for i in range(data[0])] + [f"o_{i}" for i in range(data[1])] + [f"c_{i}" for i in range(data[2])] + [f"s_{i}" for i in range(data[3])]
@@ -117,14 +118,17 @@ def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots
         m.AddBoolAnd([bool.Not() for bool in is_on_bools]).OnlyEnforceIf(truck_bool.Not()) # Everybool must be false
     
     # Define the objective
-    num_of_trucks = sum(is_item_in_truck)
+    num_of_trucks = m.NewIntVar(min_num_of_trucks, max_num_of_trucks, "num_of_trucks")
+    m.Add(num_of_trucks == sum(is_item_in_truck))
     m.Minimize(num_of_trucks)
 
     # Solve
     solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = os.cpu_count() - 1 if os.cpu_count() > 1 else 1 # Use all CPU cores (unless debugging)
+    solver.parameters.cp_model_presolve = True  # Already on by default
+    solver.parameters.linearization_level = 2  # Enables tighter internal constraints
+    solver.parameters.symmetry_level = 2  # Breaks more symmetries (can help in packing)
     solver.parameters.max_time_in_seconds = solve_time_limit
-    solver.parameters.num_search_workers = 0  # Use single thread for reproducibility
-    solver.parameters.log_search_progress = False  # Reduce output noise
     
     status = solver.Solve(m)
 
@@ -142,7 +146,7 @@ def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots
     return best_num_of_trucks
 
 if __name__ == "__main__":
-    data = Problem_1(100).get_data()
+    data = Problem_1(40).get_data()
     print(data)
     sol = ortools_cp_solver(data)
     print(sol)
