@@ -9,6 +9,8 @@ import os
 # c - couches
 # s - sofas
 
+# TODO Add a plotting function, and a function that returns all of the data points
+
 def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots: bool = False):
     """Original constraint programming solver"""
     m = cp_model.CpModel()
