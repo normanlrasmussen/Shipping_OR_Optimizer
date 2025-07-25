@@ -1,6 +1,7 @@
 from ortools.sat.python import cp_model
 from problem_1 import Problem_1
 import numpy as np
+import time
 
 # Mapping for sized [(2,2),(3,3),(3,9),(4,7)]
 # w - washers
@@ -8,13 +9,11 @@ import numpy as np
 # c - couches
 # s - sofas
 
-
-def find_optimal_packing(data:np.ndarray, solve_time_limit:int = 60, return_spots:bool = False):
+def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots: bool = False):
+    """Original constraint programming solver"""
     m = cp_model.CpModel()
-
     
     if return_spots:
-        # TODO make a method to return the positions of all the spots so we can have visualization
         raise NotImplementedError("Returning the spots not implemented")
 
     max_num_of_trucks = int(np.dot(np.array([4, 9, 27, 28]), data) * 1.5 / 208 + 1) # total area * 1.5 divided by truck area 8 * 26 + 1
@@ -140,13 +139,10 @@ def find_optimal_packing(data:np.ndarray, solve_time_limit:int = 60, return_spot
 
     best_num_of_trucks = solver.Value(num_of_trucks)
 
-    # TODO implement return_spots
-
-    return best_num_of_trucks      
-
+    return best_num_of_trucks
 
 if __name__ == "__main__":
     data = Problem_1(100).get_data()
     print(data)
-    sol = find_optimal_packing(data)
+    sol = ortools_cp_solver(data)
     print(sol)
