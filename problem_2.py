@@ -17,7 +17,7 @@ class Problem_2:
         travel_matrix += pertubations
         np.fill_diagonal(travel_matrix, 0)
         self.travel_matrix = travel_matrix
-        self.orders = np.random.multinomial(num_of_orders, [1/num_of_places for _ in range(num_of_places)])
+        self.orders = np.random.multinomial(num_of_orders, [0] + [1/num_of_places for _ in range(num_of_places - 1)])
     
     def get_data(self):
         return self.travel_matrix, self.orders
