@@ -2,6 +2,7 @@ from ortools.sat.python import cp_model
 from problem_1 import Problem_1
 import numpy as np
 import os
+from problem_1_vis import visualize_solution
 
 # Mapping for sized [(2,2),(3,3),(3,9),(4,7)]
 # w - washers
@@ -9,19 +10,16 @@ import os
 # c - couches
 # s - sofas
 
-# TODO Add a plotting function, and a function that returns all of the data points
-
-def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots: bool = False):
+def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, show_plots: bool = False):
     """Original constraint programming solver"""
     m = cp_model.CpModel()
-    
-    if return_spots:
-        raise NotImplementedError("Returning the spots not implemented")
 
     min_num_of_trucks = int(np.dot(np.array([4, 9, 27, 28]), data) / 208) # total area divided by truck area 8 * 26
     max_num_of_trucks = int(np.dot(np.array([4, 9, 27, 28]), data) * 1.5 / 208 + 1) # total area * 1.5 divided by truck area 8 * 26 + 1
     
     items = [f"w_{i}" for i in range(data[0])] + [f"o_{i}" for i in range(data[1])] + [f"c_{i}" for i in range(data[2])] + [f"s_{i}" for i in range(data[3])]
+    item_types = (["w"] * data[0]) + (["o"] * data[1]) + (["c"] * data[2]) + (["s"] * data[3])
+    item_sizes = ([ (2,2) ] * data[0]) + ([ (3,3) ] * data[1]) + ([ (9,3) ] * data[2]) + ([ (7,4) ] * data[3])
 
     # Create a boolean variable for each item to be in each truck
     item_is_in_bools = [[m.NewBoolVar(f"{item}_in_{j}") for j in range(max_num_of_trucks)] for item in items]
@@ -30,6 +28,7 @@ def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots
 
     # Create intervals holders
     all_intervals = [[] for _ in range(max_num_of_trucks)]
+    x_vars, y_vars = [], []
 
     # Create all intervals for Washers
     for i in range(data[0]):
@@ -42,6 +41,8 @@ def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots
         # Constrain end positions
         m.Add(x_end == x + 2)
         m.Add(y_end == y + 2)
+        x_vars.append(x)
+        y_vars.append(y)
         
         for j, item_bool in enumerate(item_is_in_bools[i]):
             # Create conditional intervals for each truck
@@ -61,6 +62,8 @@ def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots
         # Constrain end positions
         m.Add(x_end == x + 3)
         m.Add(y_end == y + 3)
+        x_vars.append(x)
+        y_vars.append(y)
         
         for j, item_bool in enumerate(item_is_in_bools[i + c]):
             # Create conditional intervals for each truck
@@ -80,6 +83,8 @@ def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots
         # Constrain end positions
         m.Add(x_end == x + 9)
         m.Add(y_end == y + 3)
+        x_vars.append(x)
+        y_vars.append(y)
         
         for j, item_bool in enumerate(item_is_in_bools[i + c]):
             # Create conditional intervals for each truck
@@ -100,6 +105,8 @@ def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots
         # Constrain end positions
         m.Add(x_end == x + 7)
         m.Add(y_end == y + 4)
+        x_vars.append(x)
+        y_vars.append(y)
 
         for j, item_bool in enumerate(item_is_in_bools[i + c]):
             # Create conditional intervals for each truck
@@ -118,6 +125,11 @@ def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots
         is_on_bools = [item[i] for item in item_is_in_bools]
         m.AddBoolOr(is_on_bools).OnlyEnforceIf(truck_bool) # Atleast one of the conditions must be true
         m.AddBoolAnd([bool.Not() for bool in is_on_bools]).OnlyEnforceIf(truck_bool.Not()) # Everybool must be false
+    
+    # Force trucks to be filled consecutively (no gaps)
+    for i in range(max_num_of_trucks - 1):
+        # If truck i+1 has items, then truck i must also have items
+        m.Add(is_item_in_truck[i] >= is_item_in_truck[i + 1])
     
     # Define the objective
     num_of_trucks = m.NewIntVar(min_num_of_trucks, max_num_of_trucks, "num_of_trucks")
@@ -145,10 +157,32 @@ def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, return_spots
 
     best_num_of_trucks = solver.Value(num_of_trucks)
 
+    if show_plots:
+        # Gather all item positions and truck assignments
+        results = []
+        for idx, item in enumerate(items):
+            for truck in range(max_num_of_trucks):
+                if solver.Value(item_is_in_bools[idx][truck]):
+                    x = solver.Value(x_vars[idx])
+                    y = solver.Value(y_vars[idx])
+                    results.append({
+                        'item': item,
+                        'type': item_types[idx],
+                        'size': item_sizes[idx],
+                        'truck': truck,
+                        'x': x,
+                        'y': y
+                    })
+                    break
+
+        visualize_solution(results)
+
     return best_num_of_trucks
 
 if __name__ == "__main__":
-    data = Problem_1(40).get_data()
+    data = Problem_1(30).get_data()
     print(data)
-    sol = ortools_cp_solver(data)
-    print(sol)
+    
+    sol = ortools_cp_solver(data, show_plots=True)
+    print(f"Solver result: {sol} trucks")
+    
