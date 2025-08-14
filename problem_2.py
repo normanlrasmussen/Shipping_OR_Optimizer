@@ -6,8 +6,9 @@ import numpy as np
 
 
 class Problem_2:
-    def __init__(self, num_of_places:int=10, num_of_orders:int=40, seed:int = 42):
-        np.random.seed(seed)
+    def __init__(self, num_of_places:int=10, num_of_orders:int=40, seed:int = None):
+        if seed is not None:
+            np.random.seed(seed)
         
         # Let the starting place be at index 0
         travel_matrix = np.random.randint(10, 50, size=(num_of_places, num_of_places))

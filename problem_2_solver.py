@@ -1,3 +1,4 @@
+from tabnanny import verbose
 from ortools.sat.python import cp_model
 from problem_2 import Problem_2
 import numpy as np
@@ -8,10 +9,64 @@ def shipping_solver(travel_matrix:np.ndarray, # n locations x n locations cost m
                     num_of_trucks:int, # number of trucks
                     max_orders_per_run:int, # max orders per run
                     cost_per_truck:int, # cost per truck
-                    time_limit_s:int = 30 # time limit in seconds
+                    time_limit_s:int = 30, # time limit in seconds
+                    verbose:bool = False # If printing
                     ):
     """
-    # TODO : Finish the docstring
+    Solve a vehicle routing problem with continuous route constraints.
+    
+    This solver optimizes truck routes to deliver orders while ensuring:
+    - All routes are continuous (no disconnected circuits)
+    - Trucks only visit locations where they have orders to deliver
+    - Each truck respects maximum order capacity
+    - Routes can include multiple depot visits for reloading
+    
+    Parameters:
+    -----------
+    travel_matrix : np.ndarray
+        n x n cost matrix where travel_matrix[i][j] is the cost to travel from 
+        location i to location j. Location 0 is the depot.
+        
+    orders : np.ndarray
+        n-length array where orders[i] is the number of orders to deliver to 
+        location i. orders[0] should be 0 (depot has no orders).
+        
+    num_of_trucks : int
+        Number of available trucks for delivery.
+        
+    max_orders_per_run : int
+        Maximum number of orders each truck can carry in a single run.
+        
+    cost_per_truck : int
+        Fixed cost per truck used (in addition to travel costs).
+        
+    time_limit_s : int, optional (default=30)
+        Maximum time in seconds for the solver to find a solution.
+        
+    verbose : bool, optional (default=False)
+        If True, prints detailed solution information including routes, 
+        order allocations, and costs.
+    
+    Returns:
+    --------
+    bool
+        True if an optimal solution was found, False if only a feasible 
+        solution was found within the time limit.
+    
+    Notes:
+    ------
+    - Uses OR-Tools CP-SAT solver with single-commodity flow constraints
+    - Ensures continuous routes by requiring all visited locations to be 
+      connected to the depot through a path
+    - Allows multiple depot visits per truck (e.g., 0->1->0->2->0)
+    - Optimizes for minimum total cost (travel + fixed truck costs)
+    - Uses parallel search and aggressive symmetry breaking for performance
+    
+    Example:
+    --------
+    >>> travel_matrix = np.array([[0, 10, 15], [10, 0, 20], [15, 20, 0]])
+    >>> orders = np.array([0, 5, 3])  # 5 orders to location 1, 3 to location 2
+    >>> is_optimal = shipping_solver(travel_matrix, orders, 2, 4, 10, verbose=True)
     """
 
     m = cp_model.CpModel()
@@ -154,26 +209,95 @@ def shipping_solver(travel_matrix:np.ndarray, # n locations x n locations cost m
     solver.parameters.symmetry_level = 2  # Maximum symmetry breaking
     solver.parameters.search_branching = cp_model.FIXED_SEARCH
     solver.parameters.max_time_in_seconds = time_limit_s
-    solver.parameters.log_search_progress = True  # Useful for monitoring
     solver.parameters.interleave_search = True  # Better for parallel search
     
     status = solver.Solve(m)
 
+    is_optimal = False
+
     if status == cp_model.OPTIMAL:
-        print("Optimal solution found.")
-    elif status == cp_model.FEASIBLE:
+        if verbose:
+            print("Optimal solution found.")
+        is_optimal = True
+    elif status == cp_model.FEASIBLE and verbose:
         print("Feasible solution found (but not proven optimal).")
     elif status == cp_model.INFEASIBLE:
         raise RuntimeError("No solution exists.")
-    print("")
+    if verbose:
+        print("")
 
     # Print out the solution
 
+    # Get intial Routes
+    routes = [[] for _ in range(num_of_trucks_HORIZON)]
+    for n in range(num_of_trucks_HORIZON):
+        for i in range(N):
+            for j in range(N):
+                if solver.Value(takes_path_bool[n][i][j]):
+                    routes[n].append((i, j))
+
+    # Clean up and sort the routes
+    cleaned_routes = []
+    for truck_number, route in enumerate(routes):
+        if not route:
+            # Skip empty routes
+            continue
+            
+        # Convert route to a proper sequence
+        route_sequence = []
+        current_node = 0  # Start at depot
+        
+        # Build the route by following the arcs
+        while route:  # Continue until no more arcs
+            # Find the next arc from current_node
+            next_arc = None
+            for arc in route:
+                if arc[0] == current_node:
+                    next_arc = arc
+                    break
+            
+            if next_arc is None:
+                break  # No more arcs from current node
+                
+            route_sequence.append(current_node)
+            current_node = next_arc[1]
+            
+            # Remove this arc to avoid cycles
+            route.remove(next_arc)
+            
+            # Continue even if we hit depot - we might have more arcs to follow
+        
+        if route_sequence:
+            orders_in_truck = []
+            for i in range(len(orders)):
+                orders_in_truck.append(solver.Value(specific_inventories_trucks[truck_number][i]))
+            cost_of_truck = solver.Value(run_cost[truck_number])
+
+            cleaned_routes.append([truck_number % num_of_trucks, route_sequence, orders_in_truck, cost_of_truck])
+    
+    if verbose:
+        print(f"Amount of Locations: {travel_matrix.shape[0]}")
+        print(f"Orders: {orders}")
+        print(f"Total Cost: {solver.Value(total_cost)}")
+        print("")
+            
+        cleaned_routes.sort(key=lambda x: x[0])
+        for truck_num, route, orders_in_truck, cost_of_truck in cleaned_routes:
+            print(f"Truck {truck_num}")
+            route_str = " -> ".join(str(node) for node in route + [0])
+            print(f"Route: {route_str}")
+            print(f"Orders in truck: {orders_in_truck}")
+            print(f"Cost of truck: {cost_of_truck}")
+            print("")
+
+    return is_optimal
     
 
+    
+    
 if __name__ == "__main__":
-    travel_matrix, orders = Problem_2(4, 20).get_data()
+    travel_matrix, orders = Problem_2(4, 21).get_data()
     num_of_trucks, max_orders_per_run, intial_cost_per_truck = 5, 4, 10
 
-    shipping_solver(travel_matrix, orders, num_of_trucks, max_orders_per_run, intial_cost_per_truck, time_limit_s=60)
+    shipping_solver(travel_matrix, orders, num_of_trucks, max_orders_per_run, intial_cost_per_truck, time_limit_s=60, verbose=True)
 
