@@ -1,7 +1,7 @@
 from ortools.sat.python import cp_model
 from problem_2 import Problem_2
 import numpy as np
-import multiprocessing as mp
+import os
 
 def shipping_solver(travel_matrix:np.ndarray, # n locations x n locations cost matrix
                     orders:np.ndarray, # n locations x 1 array of orders
@@ -15,6 +15,7 @@ def shipping_solver(travel_matrix:np.ndarray, # n locations x n locations cost m
     """
 
     m = cp_model.CpModel()
+    N = len(travel_matrix) 
     num_of_trucks_HORIZON = int(np.ceil(np.sum(orders))/max_orders_per_run) + 1 # This gives us a HORIZON for the maximun number of runs that we can have
 
 
@@ -40,14 +41,15 @@ def shipping_solver(travel_matrix:np.ndarray, # n locations x n locations cost m
 
     # Ensure continuous routes - no disconnected circuits
     # For each truck run, if it visits any location, it must form a single connected component
+    visited_all = []  # Collect all visited arrays
     for n in range(num_of_trucks_HORIZON):
-        N = len(travel_matrix)
         U = max_orders_per_run  # safe upper bound
 
         # 1) visited flag: turns on iff any arc touches node i (customers only)
         visited = [
             m.NewBoolVar(f"run{n}_vis_{i}") for i in range(N)
         ]
+        visited_all.append(visited)  # Store for later use
         m.Add(visited[0] == 0)  # depot doesn't "consume" flow
 
         def deg_out(i): return sum(takes_path_bool[n][i][j] for j in range(N) if j != i)
@@ -115,26 +117,63 @@ def shipping_solver(travel_matrix:np.ndarray, # n locations x n locations cost m
     # Add in that when a truck has an order it must go to that place
     # If a truck has inventory at a location, it must visit that location
     for n in range(num_of_trucks_HORIZON):
-        N = len(travel_matrix)
         for i in range(1, N):  # skip depot
-            has_delivery = m.NewBoolVar(f"run{n}_i{i}_has_delivery")
-            m.Add(specific_inventories_trucks[n][i] >= 1).OnlyEnforceIf(has_delivery)
-            m.Add(specific_inventories_trucks[n][i] == 0).OnlyEnforceIf(has_delivery.Not())
-            m.AddImplication(has_delivery, visited[n][i])  # use the per-run visited
+            # Simple gate: if delivering orders, must visit
+            U = min(max_orders_per_run, int(orders[i]))  # Tighter bound
+            m.Add(specific_inventories_trucks[n][i] <= U * visited_all[n][i])
 
+    # Fix name collision and improve cost calculation
+    run_cost = [m.NewIntVar(0, 10**12, f"run_cost_{n}") for n in range(num_of_trucks_HORIZON)]
 
+    # Add in all the costs
+    for n in range(num_of_trucks_HORIZON):
+        m.Add(
+            run_cost[n] == sum([
+                takes_path_bool[n][i][j] * travel_matrix[i][j]
+                for i in range(N)
+                for j in range(N)
+                if i != j  # Guard against i == j
+            ]) + cost_per_truck * truck_has_inventory[n]
+        )
 
+    total_cost = m.NewIntVar(0, 10**12, "total_cost")
+    m.Add(total_cost == sum(run_cost))
+
+    # Add in the minimize function
+    m.Minimize(total_cost)
+
+    # Solver with optimized parameters
+    solver = cp_model.CpSolver()
+    
+    # Parallel search - use most cores but leave one free for system
+    solver.parameters.num_search_workers = max(1, os.cpu_count() - 1)
+    
+    # Presolve and preprocessing
+    solver.parameters.cp_model_presolve = True
+    solver.parameters.linearization_level = 2  # Aggressive linearization for better bounds
+    solver.parameters.symmetry_level = 2  # Maximum symmetry breaking
+    solver.parameters.search_branching = cp_model.FIXED_SEARCH
+    solver.parameters.max_time_in_seconds = time_limit_s
+    solver.parameters.log_search_progress = True  # Useful for monitoring
+    solver.parameters.interleave_search = True  # Better for parallel search
+    
+    status = solver.Solve(m)
+
+    if status == cp_model.OPTIMAL:
+        print("Optimal solution found.")
+    elif status == cp_model.FEASIBLE:
+        print("Feasible solution found (but not proven optimal).")
+    elif status == cp_model.INFEASIBLE:
+        raise RuntimeError("No solution exists.")
+    print("")
+
+    # Print out the solution
 
     
-    # Add a fixed cost per truck
-    # Add in costs for travel matrixes
-    # Add in the minimize function
-
-
 
 if __name__ == "__main__":
-    travel_matrix, orders = Problem_2(7, 40).get_data()
-    num_of_trucks, max_orders_per_run, intial_cost_per_truck = 20, 4, 10
+    travel_matrix, orders = Problem_2(4, 20).get_data()
+    num_of_trucks, max_orders_per_run, intial_cost_per_truck = 5, 4, 10
 
-    shipping_solver(travel_matrix, orders, num_of_trucks, max_orders_per_run, intial_cost_per_truck)
+    shipping_solver(travel_matrix, orders, num_of_trucks, max_orders_per_run, intial_cost_per_truck, time_limit_s=60)
 
