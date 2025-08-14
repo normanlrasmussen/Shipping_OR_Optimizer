@@ -1,10 +1,7 @@
-from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+from ortools.sat.python import cp_model
 from problem_2 import Problem_2
 import numpy as np
 import multiprocessing as mp
-
-# TODO build model
-# https://developers.google.com/optimization/routing/vrp
 
 def shipping_solver(travel_matrix:np.ndarray, # n locations x n locations cost matrix
                     orders:np.ndarray, # n locations x 1 array of orders
@@ -17,89 +14,127 @@ def shipping_solver(travel_matrix:np.ndarray, # n locations x n locations cost m
     # TODO : Finish the docstring
     """
 
-    n_locations = travel_matrix.shape[0]
-    n_vehicles = num_of_trucks
-    depot = 0 # Depot index
+    m = cp_model.CpModel()
+    num_of_trucks_HORIZON = int(np.ceil(np.sum(orders))/max_orders_per_run) + 1 # This gives us a HORIZON for the maximun number of runs that we can have
 
-    # Normalize orders: ensure ints and zero demand at depot
-    orders = np.array(orders, dtype=int).copy()
 
-    manager = pywrapcp.RoutingIndexManager(n_locations, n_vehicles, depot) # Creates an index mapping for the locations
-    routing = pywrapcp.RoutingModel(manager) # Creates the actual routing model
-
-    def distance_cb(from_index, to_index):
-        # A distance callback is a function that returns the distance between two nodes
-        i = manager.IndexToNode(from_index)
-        j = manager.IndexToNode(to_index)
-        return int(travel_matrix[i][j])
-    transit_cb_idx = routing.RegisterTransitCallback(distance_cb) # Register the distance callback
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_cb_idx) # Set the arc cost evaluator for all vehicles
+    # Generates all the bools saying whether a path is taken in a run
+    takes_path_bool = [
+        [
+            [
+                m.NewBoolVar(f"route_{n}_from_{i}_to_{j}") if i != j else 0
+                for j in range(len(travel_matrix))
+            ] 
+            for i in range(len(travel_matrix))
+        ]
+        for n in range(num_of_trucks_HORIZON)
+    ]
     
-    def demand_cb(from_index):
-        # Returns the demand at the given index
-        i = manager.IndexToNode(from_index)
-        return int(orders[i])
-    demand_cb_idx = routing.RegisterUnaryTransitCallback(demand_cb) # Register the demand callback
-    max_demand = int(orders.max(initial=0))
-    effective_capacity = int(max(max_orders_per_run, max_demand))
-    vehicle_capacities = [effective_capacity] * n_vehicles
-    routing.AddDimensionWithVehicleCapacity(
-        demand_cb_idx,
-        0,  # slack allowed on orders, none for others
-        vehicle_capacities, # per-vehicle capacities
-        True,  # Each load starts at zero
-        "Capacity" # name of the dimension
-    )
+    # Enforce that the amount coming to a place has to be equal to the amount going out
+    for n in range(num_of_trucks_HORIZON):
+        for i in range(len(travel_matrix)):
+            # The of the amount coming to the depot has to be equal to the sum coming back
+            m.Add(sum([takes_path_bool[n][i][j] for j in range(len(travel_matrix))]) 
+            == sum([takes_path_bool[n][j][i] for j in range(len(travel_matrix))])
+            )
+
+    # Ensure continuous routes - no disconnected circuits
+    # For each truck run, if it visits any location, it must form a single connected component
+    for n in range(num_of_trucks_HORIZON):
+        N = len(travel_matrix)
+        U = max_orders_per_run  # safe upper bound
+
+        # 1) visited flag: turns on iff any arc touches node i (customers only)
+        visited = [
+            m.NewBoolVar(f"run{n}_vis_{i}") for i in range(N)
+        ]
+        m.Add(visited[0] == 0)  # depot doesn't "consume" flow
+
+        def deg_out(i): return sum(takes_path_bool[n][i][j] for j in range(N) if j != i)
+        def deg_in(i):  return sum(takes_path_bool[n][j][i] for j in range(N) if j != i)
+
+        BIGM = N
+        for i in range(1, N):
+            touch = deg_out(i) + deg_in(i)
+            m.Add(touch >= visited[i])
+            m.Add(touch <= BIGM * visited[i])
+
+        # 2) flow vars on arcs, only along chosen arcs
+        flow = [
+            [m.NewIntVar(0, U, f"f_run{n}_{i}_{j}") if i != j else None
+             for j in range(N)]
+            for i in range(N)
+        ]
+        for i in range(N):
+            for j in range(N):
+                if i == j: continue
+                m.Add(flow[i][j] <= U * takes_path_bool[n][i][j])
+
+        # 3) conservation: depot supplies 1 unit to each visited customer; customers consume 1
+        # depot balance
+        m.Add(
+            sum(flow[0][j] for j in range(1, N)) -
+            sum(flow[j][0] for j in range(1, N))
+            == sum(visited[i] for i in range(1, N))
+        )
+        # customer balances
+        for i in range(1, N):
+            m.Add(
+                sum(flow[j][i] for j in range(N) if j != i) -
+                sum(flow[i][j] for j in range(N) if j != i)
+                == visited[i]
+            )
+
+    # Enforce that every truck has a maximum number of orders
+    orders_in_truck = []
+    truck_has_inventory = []
+    for n in range(num_of_trucks_HORIZON):
+        orders_in_truck.append(m.NewIntVar(0, max_orders_per_run, f"orders_in_truck_{n}"))
+        truck_has_inventory.append(m.NewBoolVar(f"truck_{n}_has_inventory"))
+        m.Add(orders_in_truck[n] >= 1).OnlyEnforceIf(truck_has_inventory[n])
+        m.Add(orders_in_truck[n] == 0).OnlyEnforceIf(truck_has_inventory[n].Not())
+        
+        if n != 0: 
+            # Enforce filling up earlier trucks first
+            m.AddImplication(truck_has_inventory[n], truck_has_inventory[n-1])
+
+    specific_inventories_trucks = [[] for _ in range(num_of_trucks_HORIZON)]
+    deliveries_for_orders = [[] for _ in range(len(orders))]
+    for i in range(len(orders)):
+        for n in range(num_of_trucks_HORIZON):
+            specific_order = m.NewIntVar(0, max_orders_per_run, f"delivery_for_order_{i}_in_truck_{n}")
+            specific_inventories_trucks[n].append(specific_order)
+            deliveries_for_orders[i].append(specific_order)
+        # Enforces that the sum of the deliveries for an order is equal to the order
+        m.Add(sum(deliveries_for_orders[i]) == orders[i])
+    for n in range(num_of_trucks_HORIZON):
+        # Enforces that the sum of the specific inventories for a truck is less than or equal to the orders in the truck
+        m.Add(sum(specific_inventories_trucks[n]) <= orders_in_truck[n])
+
     
-    routing.SetFixedCostOfAllVehicles(cost_per_truck) # Set the fixed cost of all trucks
+    # Add in that when a truck has an order it must go to that place
+    # If a truck has inventory at a location, it must visit that location
+    for n in range(num_of_trucks_HORIZON):
+        N = len(travel_matrix)
+        for i in range(1, N):  # skip depot
+            has_delivery = m.NewBoolVar(f"run{n}_i{i}_has_delivery")
+            m.Add(specific_inventories_trucks[n][i] >= 1).OnlyEnforceIf(has_delivery)
+            m.Add(specific_inventories_trucks[n][i] == 0).OnlyEnforceIf(has_delivery.Not())
+            m.AddImplication(has_delivery, visited[n][i])  # use the per-run visited
 
-    search_params = pywrapcp.DefaultRoutingSearchParameters() # TODO learn what these do
-    search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    search_params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    search_params.time_limit.FromSeconds(time_limit_s)
-    search_params.log_search = False
 
-    # Solve
-    solution = routing.SolveWithParameters(search_params)
-    if not solution:
-        raise Exception("No solution found")
+
+
     
-    # 8) Extract routes
-    # TODO : Check if this is correct
-    routes = []
-    total_cost = solution.ObjectiveValue()
-    for v in range(n_vehicles):
-        idx = routing.Start(v)
-        if routing.IsEnd(solution.Value(routing.NextVar(idx))):
-            # Vehicle unused (route is just Start->End)
-            continue
-        route_nodes = []
-        load = 0
-        route_cost = 0
-        while not routing.IsEnd(idx):
-            node = manager.IndexToNode(idx)
-            route_nodes.append(node)
-            load += int(orders[node])
-            nxt = solution.Value(routing.NextVar(idx))
-            route_cost += routing.GetArcCostForVehicle(idx, nxt, v)
-            idx = nxt
-        route_nodes.append(manager.IndexToNode(idx))  # end depot
-        routes.append({
-            "vehicle": v,
-            "stops": route_nodes,
-            "load": load,
-            "route_cost": route_cost + cost_per_truck
-        })
-    return {"total_cost": total_cost, "routes": routes}
-    
-
-
+    # Add a fixed cost per truck
+    # Add in costs for travel matrixes
+    # Add in the minimize function
 
 
 
 if __name__ == "__main__":
     travel_matrix, orders = Problem_2(7, 40).get_data()
-    num_of_trucks, max_orders_per_run, intial_cost_per_truck = 10, 4, 10
+    num_of_trucks, max_orders_per_run, intial_cost_per_truck = 20, 4, 10
 
-    print(shipping_solver(travel_matrix, orders, num_of_trucks, max_orders_per_run, intial_cost_per_truck))
+    shipping_solver(travel_matrix, orders, num_of_trucks, max_orders_per_run, intial_cost_per_truck)
 
