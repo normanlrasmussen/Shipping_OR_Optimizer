@@ -11,7 +11,29 @@ from problem_1_vis import visualize_solution
 # s - sofas
 
 def ortools_cp_solver(data: np.ndarray, solve_time_limit: int = 60, show_plots: bool = False):
-    """Original constraint programming solver"""
+    """
+    Constraint programming solver for the truck packing problem.
+    
+    This solver uses Google OR-Tools to find the minimum number of trucks needed
+    to pack a given set of items. The items include washers (2x2), ovens (3x3),
+    couches (9x3), and sofas (7x4). Each truck has dimensions 26x8.
+    
+    Args:
+        data (np.ndarray): Array with counts of items in the format [washers, ovens, couches, sofas]
+        solve_time_limit (int, optional): Maximum time limit for solving in seconds. Defaults to 60.
+        show_plots (bool, optional): Whether to display visualization plots of the solution. Defaults to False.
+    
+    Returns:
+        int: The minimum number of trucks needed to pack all items.
+    
+    Raises:
+        RuntimeError: If no solution exists or the solver fails to find a solution.
+    
+    Example:
+        >>> data = np.array([13, 5, 2, 2])  # 13 washers, 5 ovens, 2 couches, 2 sofas
+        >>> num_trucks = ortools_cp_solver(data, show_plots=True)
+        >>> print(f"Need {num_trucks} trucks")
+    """
     m = cp_model.CpModel()
 
     min_num_of_trucks = int(np.dot(np.array([4, 9, 27, 28]), data) / 208) # total area divided by truck area 8 * 26

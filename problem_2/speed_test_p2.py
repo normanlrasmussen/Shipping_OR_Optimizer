@@ -30,19 +30,19 @@ def run_simulation(seeds, orders, num_of_locations, start_solver_time, output_fi
             num_of_trucks, max_orders_per_run, intial_cost_per_truck = 5, 4, 10
             try:
                 is_optimal = shipping_solver(travel_matrix, orders, num_of_trucks, max_orders_per_run, intial_cost_per_truck, time_limit_s=start_solver_time, verbose=False)
-                can_be_recorded.append([index, [order_size, num_of_location, seed, is_optimal]])
+                can_be_recorded.append([index, [start_solver_time, order_size, num_of_location, seed, is_optimal]])
             except Exception as e:
                 print(f"Error running simulation for {order_size} {num_of_location} {seed}: {e}")
-                can_be_recorded.append([index, [order_size, num_of_location, seed, False]])
+                can_be_recorded.append([index, [start_solver_time, order_size, num_of_location, seed, False]])
 
         # Save the results
         if not os.path.exists(output_file):
             data_to_record = [data[1] for data in can_be_recorded]
-            df = pd.DataFrame(data_to_record, columns=["order_size", "num_of_location", "seed", "is_optimal"])
+            df = pd.DataFrame(data_to_record, columns=["start_solver_time", "order_size", "num_of_location", "seed", "is_optimal"])
             df.to_csv(output_file, index=False)
         else:
             data_to_record = [data[1] for data in can_be_recorded]
-            df_to_record = pd.DataFrame(data_to_record, columns=["order_size", "num_of_location", "seed", "is_optimal"])
+            df_to_record = pd.DataFrame(data_to_record, columns=["start_solver_time", "order_size", "num_of_location", "seed", "is_optimal"])
             df = pd.read_csv(output_file)
             df = pd.concat([df, df_to_record], ignore_index=True)
             df.to_csv(output_file, index=False)
