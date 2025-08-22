@@ -66,5 +66,5 @@ if __name__ == "__main__":
     order_sizes = [10, 20, 40, 50, 70, 100]
     number_of_locations = [3, 4, 5, 6, 7]
     
-    run_simulation(seeds, order_sizes, number_of_locations, 60, "p2_data.csv")
+    run_simulation(seeds, order_sizes, number_of_locations, 60, "problem_2/p2_data.csv")
     
